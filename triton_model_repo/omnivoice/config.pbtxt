@@ -1,0 +1,46 @@
+name: "omnivoice"
+backend: "python"
+max_batch_size: 0
+
+input [
+  {
+    name: "REQUEST_JSON"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  }
+]
+
+output [
+  {
+    name: "AUDIO_WAV"
+    data_type: TYPE_UINT8
+    dims: [ -1 ]
+  },
+  {
+    name: "SAMPLE_RATE"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  },
+  {
+    name: "ELAPSED_MS"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  },
+  {
+    name: "FILENAME"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
+  {
+    name: "SAVED_TO"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]

@@ -1,160 +1,227 @@
-# OmniVoice Inference Service
+# OmniVoice Triton Service
 
-Отдельный production-oriented проект для локального инференса `OmniVoice`, не меняющий исходный репозиторий модели.
+Triton-first проект для production-oriented инференса `OmniVoice`.
 
-Сервис рассчитан на такой сценарий:
-- у вас уже есть локально скачанный checkpoint OmniVoice;
-- при необходимости у вас есть локальный исходный репозиторий `OmniVoice`;
-- вы поднимаете отдельный HTTP API и/или CLI для синтеза речи;
-- дефолтный язык сервиса настроен на якутский (`sah`, `Yakut`).
+Главная идея теперь такая:
+- `Triton Inference Server` является основным runtime;
+- текущий Python-код используется как shared inference layer для Triton Python backend;
+- локальный CLI остается как вспомогательный инструмент для отладки;
+- старый `FastAPI` код можно считать legacy/dev-only, а не основным способом деплоя.
 
-## Что умеет
+## Что есть в репозитории
 
-- HTTP API на `FastAPI`
-- `GET /healthz` и `GET /readyz`
-- `POST /v1/audio/speech` c JSON
-- `POST /v1/tts` c `multipart/form-data`
-- Ограничение конкурентности через `OMNIVOICE_MAX_CONCURRENCY`
-- Lazy/preload загрузка модели
-- Валидация входа и безопасные дефолты
-- CLI для локального вызова без HTTP
-- Опциональное сохранение результата в `outputs/`
+- `triton_model_repo/omnivoice/config.pbtxt` — Triton model config
+- `triton_model_repo/omnivoice/1/model.py` — Triton Python backend entrypoint
+- `app/service.py` — общая логика загрузки OmniVoice и синтеза
+- `app/triton_client.py` — клиент для Triton HTTP API с сохранением WAV
+- `docker-compose.yml` — основной локальный запуск Triton
+- `scripts/run_triton.sh` — быстрый старт сервера
+- `scripts/check_triton.sh` — проверка live/ready/model metadata
 
-## Важная оговорка
+## Важное ограничение
 
-Этот проект **не содержит веса модели**. Нужно указать путь к локально скачанной модели через `OMNIVOICE_MODEL_DIR`.
+Triton как production-формат ориентирован на Linux deployment.
 
-Также сам Python-пакет `omnivoice` должен быть доступен одним из двух способов:
-- либо установлен в окружение, например `pip install omnivoice`
-- либо указан путь к локальному исходному репозиторию через `OMNIVOICE_SOURCE_DIR`
+Если ты работаешь на macOS:
+- полноценный production-сценарий с Triton нужно проверять на Linux-хосте;
+- Apple `mps` внутри Triton-контейнера недоступен;
+- локально на Mac можно сделать smoke-check через Docker, но это не будет эквивалентом продовой GPU-конфигурации.
 
-Сервис умеет автоматически пытаться импортировать `omnivoice` из соседней папки `../OmniVoice`, но в проде лучше явно задать `OMNIVOICE_SOURCE_DIR`.
+Если целевой прод у тебя Linux + NVIDIA GPU, то текущая структура подходит гораздо лучше, чем отдельный FastAPI-процесс.
 
-## Структура
+## Что нужно заранее
 
-- `app/main.py` — HTTP API
-- `app/service.py` — управление моделью и инференсом
-- `app/bootstrap.py` — импорт локального OmniVoice без правок upstream
-- `app/cli.py` — локальный CLI
-- `tests/` — базовые smoke/unit tests
+Проект не содержит веса модели. Нужна локальная папка checkpoint `OmniVoice`.
+
+Минимально должны быть доступны:
+- корневой `config.json`
+- корневой `model.safetensors`
+- подпапка `audio_tokenizer/`
+
+Также в контейнере должен импортироваться Python-пакет `omnivoice`. Это уже учтено в `Dockerfile`: при сборке устанавливается `omnivoice` и сам проект.
 
 ## Быстрый старт
 
-### 1. Создать окружение и установить зависимости
-
-```bash
-cd omnivoice_inference_service
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -e .
-```
-
-Если вы хотите использовать локальный исходный репозиторий `OmniVoice`, убедитесь, что его зависимости тоже установлены. Минимально вам нужен рабочий импорт `omnivoice`.
-
-### 2. Настроить переменные окружения
+### 1. Настрой `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Минимально нужно выставить:
+Заполни минимум:
 
 ```dotenv
-OMNIVOICE_MODEL_DIR=/absolute/path/to/your/local/model
-OMNIVOICE_SOURCE_DIR=/absolute/path/to/your/local/OmniVoice
-OMNIVOICE_DEFAULT_LANGUAGE=sah
+OMNIVOICE_MODEL_DIR=/absolute/path/to/local/OmniVoice-model
 OMNIVOICE_DEVICE=auto
 OMNIVOICE_PRELOAD_MODEL=true
+OMNIVOICE_DEFAULT_LANGUAGE=sah
+OMNIVOICE_MAX_CONCURRENCY=1
 ```
 
-### 3. Запустить сервис
+Важно:
+- `OMNIVOICE_MODEL_DIR` в `.env` — это путь на хост-машине;
+- `docker-compose.yml` сам примонтирует эту папку в контейнер как `/models/omnivoice`;
+- внутри контейнера Triton будет работать уже с `/models/omnivoice`.
+
+### 2. Подними Triton
 
 ```bash
-omnivoice-service
+./scripts/run_triton.sh
 ```
 
-или
+или напрямую:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8080
+docker compose up --build
 ```
 
-## Проверка готовности
+Сервис откроет стандартные Triton порты:
+- `8000` — HTTP
+- `8001` — gRPC
+- `8002` — metrics
+
+### 3. Проверь health
+
+В отдельном терминале:
 
 ```bash
-curl http://127.0.0.1:8080/healthz
-curl http://127.0.0.1:8080/readyz
+./scripts/check_triton.sh
 ```
 
-Если `readyz` возвращает `503`, обычно причина одна из двух:
-- не задан `OMNIVOICE_MODEL_DIR`
-- не найден импорт `omnivoice`
+Это проверит:
+- `/v2/health/live`
+- `/v2/health/ready`
+- `/v2/models/omnivoice/ready`
+- `/v2/models/omnivoice`
 
-## Использование API
+Если `model ready` не проходит, почти всегда причина одна из этих:
+- неправильный `OMNIVOICE_MODEL_DIR`
+- в контейнере не загрузилась модель OmniVoice
+- модель загрузилась, но уперлась в device/dependency issue
 
-### JSON endpoint
+## Первый реальный inference test
+
+Самый удобный способ проверить end-to-end:
 
 ```bash
-curl -X POST "http://127.0.0.1:8080/v1/audio/speech" \
+python -m app.triton_client \
+  --url http://127.0.0.1:8000 \
+  --model omnivoice \
+  --text "Мин аатым Айаал. Бу Triton көмөтүнэн тургутуллар тест." \
+  --language sah \
+  --num-step 32 \
+  --output ./outputs/triton-test.wav
+```
+
+На выходе клиент:
+- отправит Triton infer request;
+- получит `AUDIO_WAV`;
+- соберет байты обратно в WAV;
+- сохранит файл локально;
+- выведет JSON с `output`, `sample_rate`, `elapsed_ms`.
+
+## Пример прямого Triton HTTP запроса
+
+Если хочется проверить API вручную:
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8000/v2/models/omnivoice/infer" \
   -H "Content-Type: application/json" \
-  --output yakut.wav \
   -d '{
-    "text": "Мин аатым Айаал. Бүгүҥҥү күн бу сервис якут тылын тургутарга бэлэм.",
-    "language": "sah",
-    "speed": 1.0,
-    "num_step": 32
+    "inputs": [
+      {
+        "name": "REQUEST_JSON",
+        "shape": [1],
+        "datatype": "BYTES",
+        "data": [
+          "{\"text\":\"Мин аатым Айаал.\",\"language\":\"sah\",\"num_step\":32}"
+        ]
+      }
+    ],
+    "outputs": [
+      {"name": "AUDIO_WAV"},
+      {"name": "SAMPLE_RATE"},
+      {"name": "ELAPSED_MS"},
+      {"name": "FILENAME"},
+      {"name": "SAVED_TO"}
+    ]
   }'
 ```
 
-### Voice cloning через multipart
+Ответ будет JSON, где:
+- `AUDIO_WAV.data` — массив байтов WAV
+- `SAMPLE_RATE.data[0]` — sample rate
+- `ELAPSED_MS.data[0]` — время инференса
 
-```bash
-curl -X POST "http://127.0.0.1:8080/v1/tts" \
-  -F 'text=Мин аатым Айаал. Бу кэпсээн якут тылынан айанар.' \
-  -F 'language=sah' \
-  -F 'ref_text=Мин аатым Айаал.' \
-  -F 'ref_audio=@./reference.wav' \
-  --output clone.wav
-```
+Для обычной ручной проверки лучше использовать `python -m app.triton_client`, потому что он уже сохраняет результат в файл.
 
-## CLI
+## Как устроен вход модели
+
+Triton модель принимает один input tensor:
+
+- `REQUEST_JSON` (`TYPE_STRING`, shape `[1]`)
+
+Внутри него JSON, совместимый с `SynthesisRequest`.
+
+Поддерживаются те же поля, что и раньше:
+- `text`
+- `language`
+- `instruct`
+- `ref_text`
+- `reference_audio_b64`
+- `num_step`
+- `guidance_scale`
+- `speed`
+- `duration`
+- `t_shift`
+- `denoise`
+- `postprocess_output`
+- `layer_penalty_factor`
+- `position_temperature`
+- `class_temperature`
+
+## Что именно проверять после запуска
+
+Минимальный checklist:
+
+1. `docker compose up --build` завершился без model load errors.
+2. `curl http://127.0.0.1:8000/v2/health/live` возвращает success.
+3. `curl http://127.0.0.1:8000/v2/health/ready` возвращает success.
+4. `curl http://127.0.0.1:8000/v2/models/omnivoice/ready` возвращает success.
+5. `python -m app.triton_client ... --output ./outputs/test.wav` реально создает WAV.
+6. WAV открывается и звучит ожидаемо.
+
+Если нужен voice cloning, дополнительно проверь:
+- короткий референс 3-10 секунд;
+- корректный `ref_text`;
+- что `reference_audio_b64` действительно соответствует WAV/decodable audio.
+
+## Файлы, которые теперь важны для деплоя
+
+- [Dockerfile](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/Dockerfile:1)
+- [docker-compose.yml](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/docker-compose.yml:1)
+- [triton_model_repo/omnivoice/config.pbtxt](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/triton_model_repo/omnivoice/config.pbtxt:1)
+- [triton_model_repo/omnivoice/1/model.py](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/triton_model_repo/omnivoice/1/model.py:1)
+- [app/service.py](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/app/service.py:1)
+- [app/triton_client.py](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/app/triton_client.py:1)
+
+## Production замечания
+
+- Для реального GPU production лучше держать один model instance на одну GPU allocation и масштабировать горизонтально.
+- `OMNIVOICE_MAX_CONCURRENCY=1` — хороший безопасный старт для тяжелой TTS-модели.
+- Если deployment идет на Linux + NVIDIA, обычно имеет смысл выставлять `OMNIVOICE_DEVICE=cuda`.
+- Если нужен CPU-only Triton, он тоже возможен, но latency будет существенно хуже.
+- На macOS текущий стек полезен для подготовки репозитория и smoke-тестов, но не как финальная prod-среда.
+
+## Локальный CLI
+
+Для отладки без Triton по-прежнему можно использовать:
 
 ```bash
 omnivoice-synth \
-  --text "Мин аатым Айаал. Бу якут тылынан локальнай тест." \
+  --text "Мин аатым Айаал. Бу локальнай тест." \
   --language sah \
-  --output ./tmp/yakut.wav
+  --output ./outputs/debug.wav
 ```
 
-Для cloning:
-
-```bash
-omnivoice-synth \
-  --text "Мин аатым Айаал. Бу якут тылынан локальнай тест." \
-  --language sah \
-  --ref-audio ./reference.wav \
-  --ref-text "Мин аатым Айаал." \
-  --output ./tmp/yakut-clone.wav
-```
-
-## Production notes
-
-- По умолчанию `OMNIVOICE_MAX_CONCURRENCY=1`. Для тяжёлой TTS модели это безопасный старт.
-- Для GPU production лучше держать один процесс на одну модель и масштабировать горизонтально.
-- `GET /readyz` форсирует проверку реальной загрузки модели.
-- Авто-ASR для `ref_text` по умолчанию отключён. Для продакшена это правильно: меньше зависимостей, меньше сюрпризов, предсказуемее latency.
-- Для якутского лучше всегда явно передавать `language="sah"`, даже несмотря на дефолт.
-- Референсное аудио для cloning желательно держать коротким, примерно 3-10 секунд.
-
-## Почему `sah`
-
-В upstream OmniVoice якутский язык поддерживается и обозначается как `Yakut` с language id `sah`.
-
-## Что ещё можно добавить потом
-
-- очередь задач через Redis/Celery
-- Prometheus метрики
-- bearer auth / API key
-- persistent voice profile cache
-- OpenAI-compatible слой поверх текущего API
+Это полезно, если нужно отделить “проблема в Triton runtime” от “проблема в самой модели/весах”.

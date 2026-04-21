@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "omnivoice-inference-service"
 version = "0.1.0"
-description = "Production-ready HTTP inference service for local OmniVoice TTS deployments"
+description = "Triton-first OmniVoice inference service for local TTS deployments"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "OpenAI Codex" }]
@@ -27,6 +27,7 @@ dev = [
 [project.scripts]
 omnivoice-service = "app.main:run"
 omnivoice-synth = "app.cli:main"
+omnivoice-triton-client = "app.triton_client:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

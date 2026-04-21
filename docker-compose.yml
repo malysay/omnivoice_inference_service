@@ -1,0 +1,26 @@
+services:
+  triton:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omnivoice-triton
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    environment:
+      OMNIVOICE_MODEL_DIR: /models/omnivoice
+      OMNIVOICE_SOURCE_DIR: ""
+      OMNIVOICE_DEVICE: ${OMNIVOICE_DEVICE:-auto}
+      OMNIVOICE_LOG_LEVEL: ${OMNIVOICE_LOG_LEVEL:-INFO}
+      OMNIVOICE_PRELOAD_MODEL: ${OMNIVOICE_PRELOAD_MODEL:-true}
+      OMNIVOICE_DEFAULT_LANGUAGE: ${OMNIVOICE_DEFAULT_LANGUAGE:-sah}
+      OMNIVOICE_MAX_CONCURRENCY: ${OMNIVOICE_MAX_CONCURRENCY:-1}
+      OMNIVOICE_OUTPUT_DIR: /tmp/omnivoice-outputs
+    volumes:
+      - ./triton_model_repo:/models-repo:ro
+      - ${OMNIVOICE_MODEL_DIR}:/models/omnivoice:ro
+    command:
+      - tritonserver
+      - --model-repository=/models-repo
+      - --model-control-mode=none

@@ -71,6 +71,11 @@ class OmniVoiceManager:
             )
         if not self.settings.model_path.exists():
             raise RuntimeError(f"Model directory does not exist: {self.settings.model_path}")
+        if not self.settings.model_path.is_dir():
+            raise RuntimeError(
+                "OMNIVOICE_MODEL_DIR must point to a model directory, not a file: "
+                f"{self.settings.model_path}"
+            )
 
         ensure_omnivoice_importable(self.settings)
         from omnivoice.models.omnivoice import OmniVoice
