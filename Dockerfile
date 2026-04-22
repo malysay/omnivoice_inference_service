@@ -8,9 +8,6 @@ WORKDIR /workspace/omnivoice_inference_service
 COPY pyproject.toml README.md ./
 COPY app ./app
 COPY triton_model_repo ./triton_model_repo
-COPY .env.example ./
-COPY examples ./examples
-COPY scripts ./scripts
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg libsndfile1 && \
@@ -18,6 +15,7 @@ RUN apt-get update && \
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir omnivoice && \
+    python3 -m pip install --no-cache-dir sentencepiece tiktoken && \
     python3 -m pip install --no-cache-dir .
 
 EXPOSE 8000 8001 8002

@@ -1,57 +1,46 @@
 # OmniVoice Triton Service
 
-Triton-first проект для production-oriented инференса `OmniVoice`.
+Triton-first сервис для запуска `OmniVoice` через Triton Python backend.
 
-Главная идея теперь такая:
-- `Triton Inference Server` является основным runtime;
-- текущий Python-код используется как shared inference layer для Triton Python backend;
-- локальный CLI остается как вспомогательный инструмент для отладки;
-- старый `FastAPI` код можно считать legacy/dev-only, а не основным способом деплоя.
+Основная идея:
+- Triton является основным runtime для inference
+- код в `app/` используется как shared inference layer
+- веса модели живут отдельно от Docker image и монтируются в контейнер как volume
 
-## Что есть в репозитории
+## Что В Репозитории
 
-- `triton_model_repo/omnivoice/config.pbtxt` — Triton model config
-- `triton_model_repo/omnivoice/1/model.py` — Triton Python backend entrypoint
-- `app/service.py` — общая логика загрузки OmniVoice и синтеза
-- `app/triton_client.py` — клиент для Triton HTTP API с сохранением WAV
-- `docker-compose.yml` — основной локальный запуск Triton
-- `scripts/run_triton.sh` — быстрый старт сервера
-- `scripts/check_triton.sh` — проверка live/ready/model metadata
+- `docker-compose.yml` — локальный запуск Triton
+- `Dockerfile` — образ Triton + Python runtime
+- `triton_model_repo/omnivoice/` — Triton model repository
+- `app/service.py` — загрузка OmniVoice и синтез
+- `app/triton_client.py` — HTTP-клиент для тестового inference
+- `scripts/download_model.sh` — скачивание модели из Hugging Face
+- `scripts/run_triton.sh` — запуск Triton
+- `scripts/check_triton.sh` — проверка live/ready/model endpoints
 
-## Важное ограничение
+## Важное Ограничение
 
-Triton как production-формат ориентирован на Linux deployment.
+Triton ориентирован на Linux deployment.
 
-Если ты работаешь на macOS:
-- полноценный production-сценарий с Triton нужно проверять на Linux-хосте;
-- Apple `mps` внутри Triton-контейнера недоступен;
-- локально на Mac можно сделать smoke-check через Docker, но это не будет эквивалентом продовой GPU-конфигурации.
+Если вы работаете на macOS:
+- контейнер можно использовать для smoke-check
+- `mps` внутри Triton-контейнера недоступен
+- локальный запуск на Mac не равен production GPU-среде
 
-Если целевой прод у тебя Linux + NVIDIA GPU, то текущая структура подходит гораздо лучше, чем отдельный FastAPI-процесс.
+Если целевой прод у вас на Linux + NVIDIA GPU, текущая структура подходит хорошо.
 
-## Что нужно заранее
+## Быстрый Старт
 
-Проект не содержит веса модели. Нужна локальная папка checkpoint `OmniVoice`.
-
-Минимально должны быть доступны:
-- корневой `config.json`
-- корневой `model.safetensors`
-- подпапка `audio_tokenizer/`
-
-Также в контейнере должен импортироваться Python-пакет `omnivoice`. Это уже учтено в `Dockerfile`: при сборке устанавливается `omnivoice` и сам проект.
-
-## Быстрый старт
-
-### 1. Настрой `.env`
+### 1. Подготовьте `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Заполни минимум:
+Минимально нужно заполнить:
 
 ```dotenv
-OMNIVOICE_MODEL_DIR=/absolute/path/to/local/OmniVoice-model
+OMNIVOICE_MODEL_DIR=/absolute/path/to/local/OmniVoice-runtime
 OMNIVOICE_DEVICE=auto
 OMNIVOICE_PRELOAD_MODEL=true
 OMNIVOICE_DEFAULT_LANGUAGE=sah
@@ -59,28 +48,50 @@ OMNIVOICE_MAX_CONCURRENCY=1
 ```
 
 Важно:
-- `OMNIVOICE_MODEL_DIR` в `.env` — это путь на хост-машине;
-- `docker-compose.yml` сам примонтирует эту папку в контейнер как `/models/omnivoice`;
-- внутри контейнера Triton будет работать уже с `/models/omnivoice`.
+- `OMNIVOICE_MODEL_DIR` указывается как путь на хост-машине
+- `docker-compose.yml` монтирует эту папку в контейнер как `/models/omnivoice`
+- сами веса не запекаются в Docker image
 
-### 2. Подними Triton
+### 2. Скачайте модель
+
+Рекомендуемый путь для новых разработчиков: сначала скачать весь Hugging Face snapshot, а уже потом при желании оптимизировать скачивание.
+
+Команда по умолчанию:
+
+```bash
+./scripts/download_model.sh
+```
+
+Что делает скрипт:
+- устанавливает `.[download]`, если это ещё не сделано
+- скачивает модель `k2-fsa/OmniVoice`
+- кладёт её в `./models/omnivoice-runtime`
+- по умолчанию использует `full` mode, то есть скачивает весь snapshot
+
+После скачивания пропишите абсолютный путь в `.env`:
+
+```dotenv
+OMNIVOICE_MODEL_DIR=/absolute/path/to/omnivoice_inference_service/models/omnivoice-runtime
+```
+
+### 3. Поднимите Triton
 
 ```bash
 ./scripts/run_triton.sh
 ```
 
-или напрямую:
+или:
 
 ```bash
 docker compose up --build
 ```
 
-Сервис откроет стандартные Triton порты:
+Будут открыты порты:
 - `8000` — HTTP
 - `8001` — gRPC
 - `8002` — metrics
 
-### 3. Проверь health
+### 4. Проверьте Health
 
 В отдельном терминале:
 
@@ -88,20 +99,13 @@ docker compose up --build
 ./scripts/check_triton.sh
 ```
 
-Это проверит:
+Проверяются:
 - `/v2/health/live`
 - `/v2/health/ready`
 - `/v2/models/omnivoice/ready`
 - `/v2/models/omnivoice`
 
-Если `model ready` не проходит, почти всегда причина одна из этих:
-- неправильный `OMNIVOICE_MODEL_DIR`
-- в контейнере не загрузилась модель OmniVoice
-- модель загрузилась, но уперлась в device/dependency issue
-
-## Первый реальный inference test
-
-Самый удобный способ проверить end-to-end:
+### 5. Сделайте Первый Inference
 
 ```bash
 python -m app.triton_client \
@@ -113,115 +117,145 @@ python -m app.triton_client \
   --output ./outputs/triton-test.wav
 ```
 
-На выходе клиент:
-- отправит Triton infer request;
-- получит `AUDIO_WAV`;
-- соберет байты обратно в WAV;
-- сохранит файл локально;
-- выведет JSON с `output`, `sample_rate`, `elapsed_ms`.
+Если всё прошло успешно:
+- появится файл `./outputs/triton-test.wav`
+- клиент выведет JSON с `output`, `sample_rate`, `elapsed_ms`
 
-## Пример прямого Triton HTTP запроса
+## Скачивание Модели
 
-Если хочется проверить API вручную:
+### Вариант 1. Готовый Скрипт
 
-```bash
-curl -sS -X POST "http://127.0.0.1:8000/v2/models/omnivoice/infer" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "inputs": [
-      {
-        "name": "REQUEST_JSON",
-        "shape": [1],
-        "datatype": "BYTES",
-        "data": [
-          "{\"text\":\"Мин аатым Айаал.\",\"language\":\"sah\",\"num_step\":32}"
-        ]
-      }
-    ],
-    "outputs": [
-      {"name": "AUDIO_WAV"},
-      {"name": "SAMPLE_RATE"},
-      {"name": "ELAPSED_MS"},
-      {"name": "FILENAME"},
-      {"name": "SAVED_TO"}
-    ]
-  }'
-```
-
-Ответ будет JSON, где:
-- `AUDIO_WAV.data` — массив байтов WAV
-- `SAMPLE_RATE.data[0]` — sample rate
-- `ELAPSED_MS.data[0]` — время инференса
-
-Для обычной ручной проверки лучше использовать `python -m app.triton_client`, потому что он уже сохраняет результат в файл.
-
-## Как устроен вход модели
-
-Triton модель принимает один input tensor:
-
-- `REQUEST_JSON` (`TYPE_STRING`, shape `[1]`)
-
-Внутри него JSON, совместимый с `SynthesisRequest`.
-
-Поддерживаются те же поля, что и раньше:
-- `text`
-- `language`
-- `instruct`
-- `ref_text`
-- `reference_audio_b64`
-- `num_step`
-- `guidance_scale`
-- `speed`
-- `duration`
-- `t_shift`
-- `denoise`
-- `postprocess_output`
-- `layer_penalty_factor`
-- `position_temperature`
-- `class_temperature`
-
-## Что именно проверять после запуска
-
-Минимальный checklist:
-
-1. `docker compose up --build` завершился без model load errors.
-2. `curl http://127.0.0.1:8000/v2/health/live` возвращает success.
-3. `curl http://127.0.0.1:8000/v2/health/ready` возвращает success.
-4. `curl http://127.0.0.1:8000/v2/models/omnivoice/ready` возвращает success.
-5. `python -m app.triton_client ... --output ./outputs/test.wav` реально создает WAV.
-6. WAV открывается и звучит ожидаемо.
-
-Если нужен voice cloning, дополнительно проверь:
-- короткий референс 3-10 секунд;
-- корректный `ref_text`;
-- что `reference_audio_b64` действительно соответствует WAV/decodable audio.
-
-## Файлы, которые теперь важны для деплоя
-
-- [Dockerfile](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/Dockerfile:1)
-- [docker-compose.yml](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/docker-compose.yml:1)
-- [triton_model_repo/omnivoice/config.pbtxt](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/triton_model_repo/omnivoice/config.pbtxt:1)
-- [triton_model_repo/omnivoice/1/model.py](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/triton_model_repo/omnivoice/1/model.py:1)
-- [app/service.py](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/app/service.py:1)
-- [app/triton_client.py](/Users/malysay/Apros/Work/Code/omnivoice_inference_service/app/triton_client.py:1)
-
-## Production замечания
-
-- Для реального GPU production лучше держать один model instance на одну GPU allocation и масштабировать горизонтально.
-- `OMNIVOICE_MAX_CONCURRENCY=1` — хороший безопасный старт для тяжелой TTS-модели.
-- Если deployment идет на Linux + NVIDIA, обычно имеет смысл выставлять `OMNIVOICE_DEVICE=cuda`.
-- Если нужен CPU-only Triton, он тоже возможен, но latency будет существенно хуже.
-- На macOS текущий стек полезен для подготовки репозитория и smoke-тестов, но не как финальная prod-среда.
-
-## Локальный CLI
-
-Для отладки без Triton по-прежнему можно использовать:
+Публичный репозиторий:
 
 ```bash
-omnivoice-synth \
-  --text "Мин аатым Айаал. Бу локальнай тест." \
-  --language sah \
-  --output ./outputs/debug.wav
+./scripts/download_model.sh
 ```
 
-Это полезно, если нужно отделить “проблема в Triton runtime” от “проблема в самой модели/весах”.
+Другой репозиторий:
+
+```bash
+HF_REPO_ID=owner/other-model ./scripts/download_model.sh
+```
+
+Другая ревизия:
+
+```bash
+HF_REPO_ID=k2-fsa/OmniVoice HF_REVISION=main ./scripts/download_model.sh
+```
+
+Закрытый или gated репозиторий:
+
+```bash
+HF_REPO_ID=owner/private-model HF_TOKEN=hf_xxx ./scripts/download_model.sh
+```
+
+Скачать не весь snapshot, а только минимальный runtime subset:
+
+```bash
+DOWNLOAD_MODE=minimal ./scripts/download_model.sh
+```
+
+Переопределить папку назначения:
+
+```bash
+MODEL_DIR=/srv/models/omnivoice-runtime ./scripts/download_model.sh
+```
+
+Поддерживаемые переменные:
+- `HF_REPO_ID` — Hugging Face repo id, по умолчанию `k2-fsa/OmniVoice`
+- `HF_REVISION` — branch, tag или commit SHA, по умолчанию `main`
+- `HF_TOKEN` — токен для gated/private модели
+- `MODEL_DIR` — папка для скачивания модели
+- `DOWNLOAD_MODE` — `full` или `minimal`
+
+### Вариант 2. Python CLI
+
+Полный snapshot:
+
+```bash
+python -m pip install '.[download]'
+
+python -m app.download_model \
+  --repo-id k2-fsa/OmniVoice \
+  --revision main \
+  --output-dir ./models/omnivoice-runtime \
+  --full-snapshot
+```
+
+Минимальный runtime snapshot:
+
+```bash
+python -m app.download_model \
+  --repo-id k2-fsa/OmniVoice \
+  --revision main \
+  --output-dir ./models/omnivoice-runtime
+```
+
+Закрытый или gated репозиторий:
+
+```bash
+python -m app.download_model \
+  --repo-id owner/private-model \
+  --revision main \
+  --output-dir ./models/omnivoice-runtime \
+  --full-snapshot \
+  --token hf_xxx
+```
+
+Для первого запуска лучше использовать `--full-snapshot`: это надёжнее и снижает риск missing-file ошибок.
+
+## Что Нужна Модели Для Работы
+
+Сервис ожидает, что `OMNIVOICE_MODEL_DIR` указывает на корректную папку модели.
+
+Минимально должны присутствовать:
+- `config.json`
+- один или несколько `*.safetensors`
+- файлы текстового tokenizer
+- папка `audio_tokenizer/`
+
+Если используете `full` mode, об этом можно не думать: скрипт скачает весь репозиторий модели.
+
+## Диагностика
+
+Если сервис не отвечает:
+
+```bash
+docker compose ps
+docker compose logs -f triton
+```
+
+Если `model ready` не проходит, самые частые причины:
+- неправильный `OMNIVOICE_MODEL_DIR`
+- скачалась неполная папка модели
+- для private/gated repo не был передан `HF_TOKEN`
+- контейнер не смог загрузить tokenizer или зависимости
+- на локальном Mac есть ограничения по сравнению с Linux GPU runtime
+
+Health-check вручную:
+
+```bash
+curl -fsS http://127.0.0.1:8000/v2/health/live
+curl -fsS http://127.0.0.1:8000/v2/health/ready
+curl -fsS http://127.0.0.1:8000/v2/models/omnivoice/ready
+```
+
+Проверка содержимого модели:
+
+```bash
+find "$OMNIVOICE_MODEL_DIR" -maxdepth 2 | sort | sed -n '1,120p'
+```
+
+## Production Подход
+
+Для production удобнее держать отдельно:
+- Docker image с Triton и кодом сервиса
+- директорию с весами модели на сервере
+
+Обычно flow такой:
+1. Скачать модель на машине с доступом к Hugging Face
+2. Передать папку на сервер через `rsync`, артефакт или object storage
+3. На сервере выставить `OMNIVOICE_MODEL_DIR=/srv/omnivoice/weights/omnivoice-runtime`
+4. Выполнить `docker compose up -d --build`
+
+Это удобнее, чем запекать веса внутрь образа: rebuild образа остаётся быстрым, а модель можно обновлять отдельно от кода.

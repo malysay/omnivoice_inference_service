@@ -17,17 +17,23 @@ dependencies = [
   "soundfile>=0.12.1",
   "numpy>=1.26.0",
   "httpx>=0.27.0",
+  "sentencepiece>=0.2.0",
+  "tiktoken>=0.9.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
 ]
+download = [
+  "huggingface_hub>=0.30.0",
+]
 
 [project.scripts]
 omnivoice-service = "app.main:run"
 omnivoice-synth = "app.cli:main"
 omnivoice-triton-client = "app.triton_client:main"
+omnivoice-download-model = "app.download_model:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

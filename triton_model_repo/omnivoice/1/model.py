@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -13,17 +14,39 @@ import triton_python_backend_utils as pb_utils
 LOGGER = logging.getLogger("omnivoice_triton")
 
 
+def _is_project_root(candidate: Path) -> bool:
+    app_dir = candidate / "app"
+    return (app_dir / "service.py").exists() and (app_dir / "schemas.py").exists()
+
+
 def _ensure_project_on_path() -> Path:
     current = Path(__file__).resolve()
-    candidates = [current.parent, *current.parents]
+    configured_root = os.getenv("OMNIVOICE_PROJECT_ROOT")
+    candidates: list[Path] = []
+
+    if configured_root:
+        candidates.append(Path(configured_root).expanduser().resolve())
+
+    candidates.extend(
+        [
+            Path.cwd().resolve(),
+            Path("/workspace/omnivoice_inference_service"),
+            current.parent,
+            *current.parents,
+        ]
+    )
+
+    seen: set[Path] = set()
     for candidate in candidates:
-        app_dir = candidate / "app"
-        if (app_dir / "service.py").exists() and (app_dir / "schemas.py").exists():
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _is_project_root(candidate):
             sys.path.insert(0, str(candidate))
             return candidate
     raise RuntimeError(
         "Unable to locate project root for OmniVoice service. "
-        "Place the Triton model repository inside the project or update model.py path discovery."
+        "Set OMNIVOICE_PROJECT_ROOT or place the Triton model repository inside the project."
     )
 
 

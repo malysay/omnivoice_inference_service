@@ -10,6 +10,7 @@ from typing import Any
 from app.audio import decode_audio_b64, encode_wav_bytes, persist_wav, sanitize_filename
 from app.bootstrap import OmniVoiceImportError, ensure_omnivoice_importable
 from app.config import Settings
+from app.model_assets import validate_model_dir
 from app.schemas import SynthesisRequest
 
 logger = logging.getLogger(__name__)
@@ -69,13 +70,7 @@ class OmniVoiceManager:
             raise RuntimeError(
                 "OMNIVOICE_MODEL_DIR is not configured. Point it to the local OmniVoice model directory."
             )
-        if not self.settings.model_path.exists():
-            raise RuntimeError(f"Model directory does not exist: {self.settings.model_path}")
-        if not self.settings.model_path.is_dir():
-            raise RuntimeError(
-                "OMNIVOICE_MODEL_DIR must point to a model directory, not a file: "
-                f"{self.settings.model_path}"
-            )
+        validate_model_dir(self.settings.model_path)
 
         ensure_omnivoice_importable(self.settings)
         from omnivoice.models.omnivoice import OmniVoice
